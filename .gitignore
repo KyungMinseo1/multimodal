@@ -1,0 +1,7 @@
+*.ipynb_checkpoints
+__pycache__
+.env
+경영정보시스템5_chroma_db
+feedback_경민서.csv
+feedback_경민서.png
+temp_file

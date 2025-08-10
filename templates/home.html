@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>학습 피드백 - 홈</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>📘 학습 피드백 생성기</h1>
+        <form method="POST" action="/">
+            <label for="name">이름</label>
+            <input type="text" name="name" required placeholder="홍길동">
+            <label for="topic">학습 주제</label>
+            <input type="text" name="topic" required placeholder="예: 자료구조, 알고리즘, 전공수업 등">
+            <button type="submit">피드백 받기</button>
+        </form>
+    </div>
+</body>
+</html>

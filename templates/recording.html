@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>웹캠/마이크 녹화</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style2.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>🎥 웹캠/마이크 녹화 시스템</h1>
+        
+        <!-- 비디오 미리보기 -->
+        <div class="video-container">
+            <video id="videoPreview" autoplay muted playsinline></video>
+            <div id="recordingIndicator" class="recording-indicator">🔴 REC</div>
+        </div>
+        
+        <!-- 녹화 컨트롤 -->
+        <div class="version-section">
+            <div class="version-title">🎬 10초 단위 분할 녹화</div>
+            <div class="description">
+                10초마다 새로운 파일을 생성하여 연속적으로 저장합니다. 각 세그먼트는 별도의 비디오/오디오 파일로 저장됩니다.
+            </div>
+            <div class="button-group">
+                <button id="startBtn" class="start-btn" onclick="startRecording()">분할 녹화 시작</button>
+                <button id="stopBtn" class="stop-btn" onclick="stopRecording()" disabled>분할 녹화 종료</button>
+            </div>
+            <div id="timer" class="timer" style="display: none;">00:00</div>
+            <div id="status-v2" class="status stopped">카메라 준비 중...</div>
+        </div>
+        
+        <!-- 상태 확인 -->
+        <div class="version-section">
+            <div class="version-title">📊 녹화 상태 확인</div>
+            <button class="status-btn" onclick="checkStatus()">현재 상태 확인</button>
+            <div id="status-info" class="status info" style="display: none;"></div>
+        </div>
+    </div>
+
+    <script>
+        let mediaStream = null;
+        let mediaRecorder = null;
+        let isRecording = false;
+        let recordingStartTime = null;
+        let timerInterval = null;
+        
+        // 페이지 로드 시 카메라 초기화
+        window.onload = async function() {
+            await initializeCamera();
+            checkStatus();
+        };
+        
+        // 카메라 초기화
+        async function initializeCamera() {
+            try {
+                const constraints = {
+                    video: {
+                        width: { ideal: 1080 },
+                        height: { ideal: 720 },
+                        frameRate: { ideal: 30 }
+                    },
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true
+                    }
+                };
+                
+                mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+                const videoPreview = document.getElementById('videoPreview');
+                videoPreview.srcObject = mediaStream;
+                
+                document.getElementById('status-v2').innerHTML = '📹 카메라 준비 완료 - 녹화 가능';
+                document.getElementById('status-v2').className = 'status stopped';
+                document.getElementById('startBtn').disabled = false;
+                
+            } catch (error) {
+                console.error('카메라 접근 오류:', error);
+                document.getElementById('status-v2').innerHTML = '❌ 카메라 접근 실패 - 권한을 확인하세요';
+                document.getElementById('status-v2').className = 'status stopped';
+            }
+        }
+        
+        // 녹화 시작
+        async function startRecording() {
+            if (!mediaStream || isRecording) return;
+            
+            try {
+                // 서버에 녹화 시작 요청
+                const response = await fetch('/start_recording_v2', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                
+                const data = await response.json();
+                
+                if (data.status === 'recording_started') {
+                    isRecording = true;
+                    recordingStartTime = Date.now();
+                    
+                    // UI 업데이트
+                    document.getElementById('startBtn').disabled = true;
+                    document.getElementById('stopBtn').disabled = false;
+                    document.getElementById('recordingIndicator').classList.add('active');
+                    document.getElementById('status-v2').innerHTML = '🔴 녹화 중 - 10초 단위로 분할 저장';
+                    document.getElementById('status-v2').className = 'status recording pulse';
+                    document.getElementById('timer').style.display = 'block';
+                    
+                    // 타이머 시작
+                    startTimer();
+                    
+                    // 브라우저 녹화도 시작 (백업용)
+                    startBrowserRecording();
+                    
+                } else {
+                    throw new Error(data.message || '녹화 시작 실패');
+                }
+                
+            } catch (error) {
+                console.error('녹화 시작 오류:', error);
+                document.getElementById('status-v2').innerHTML = '❌ 녹화 시작 실패';
+                document.getElementById('status-v2').className = 'status stopped';
+            }
+        }
+        
+        // 녹화 종료
+        async function stopRecording() {
+            if (!isRecording) return;
+            
+            try {
+                // 서버에 녹화 종료 요청
+                const response = await fetch('/stop_recording_v2', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                
+                const data = await response.json();
+                
+                isRecording = false;
+                
+                // 브라우저 녹화 종료
+                if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                    mediaRecorder.stop();
+                }
+                
+                // 타이머 종료
+                if (timerInterval) {
+                    clearInterval(timerInterval);
+                    timerInterval = null;
+                }
+                
+                // UI 업데이트
+                document.getElementById('startBtn').disabled = false;
+                document.getElementById('stopBtn').disabled = true;
+                document.getElementById('recordingIndicator').classList.remove('active');
+                document.getElementById('timer').style.display = 'none';
+                
+                if (data.status === 'recording_stopped') {
+                    let message = `✅ 녹화 완료`;
+                    if (data.total_segments) {
+                        message += ` - 총 ${data.total_segments}개 세그먼트`;
+                    }
+                    document.getElementById('status-v2').innerHTML = message;
+                    document.getElementById('status-v2').className = 'status stopped';
+                } else {
+                    document.getElementById('status-v2').innerHTML = '⚠️ 녹화가 이미 중지되었습니다';
+                    document.getElementById('status-v2').className = 'status stopped';
+                }
+                
+            } catch (error) {
+                console.error('녹화 종료 오류:', error);
+                document.getElementById('status-v2').innerHTML = '❌ 녹화 종료 실패';
+                document.getElementById('status-v2').className = 'status stopped';
+            }
+        }
+        
+        // 브라우저 녹화 시작 (백업/추가 기능)
+        function startBrowserRecording() {
+            if (!mediaStream) return;
+            
+            try {
+                mediaRecorder = new MediaRecorder(mediaStream, {
+                    mimeType: 'video/webm;codecs=vp9'
+                });
+                
+                mediaRecorder.ondataavailable = function(event) {
+                    if (event.data.size > 0) {
+                        // 필요시 브라우저에서도 파일 저장 가능
+                        console.log('브라우저 녹화 데이터 수신:', event.data.size, 'bytes');
+                    }
+                };
+                
+                mediaRecorder.start(1000); // 1초마다 데이터 수집
+                
+            } catch (error) {
+                console.error('브라우저 녹화 시작 오류:', error);
+            }
+        }
+        
+        // 타이머 시작
+        function startTimer() {
+            timerInterval = setInterval(function() {
+                if (!recordingStartTime) return;
+                
+                const elapsed = Math.floor((Date.now() - recordingStartTime) / 1000);
+                const minutes = Math.floor(elapsed / 60);
+                const seconds = elapsed % 60;
+                
+                const timeString = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+                document.getElementById('timer').innerHTML = `⏱️ ${timeString}`;
+            }, 1000);
+        }
+        
+        // 상태 확인
+        function checkStatus() {
+            fetch('/recording_status')
+            .then(response => response.json())
+            .then(data => {
+                const statusInfo = document.getElementById('status-info');
+                let message = '📊 현재 녹화 상태:\n';
+                message += `• 웹캠: ${data.v2_active ? '🔴 녹화 중' : '⭕ 대기 중'}`;
+                if (data.v2_active && data.v2_segments > 0) {
+                    message += ` (${data.v2_segments}개 세그먼트 완료)`;
+                }
+                
+                statusInfo.innerHTML = message.replace(/\n/g, '<br>');
+                statusInfo.style.display = 'block';
+                statusInfo.className = 'status info';
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                const statusInfo = document.getElementById('status-info');
+                statusInfo.innerHTML = '❌ 상태 확인 실패';
+                statusInfo.style.display = 'block';
+                statusInfo.className = 'status stopped';
+            });
+        }
+        
+        // 5초마다 자동으로 상태 업데이트
+        setInterval(checkStatus, 5000);
+        
+        // 페이지 종료 시 정리
+        window.addEventListener('beforeunload', function() {
+            if (isRecording) {
+                stopRecording();
+            }
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => track.stop());
+            }
+        });
+    </script>
+</body>
+</html>

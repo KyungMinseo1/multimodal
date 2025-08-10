@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>피드백 결과</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>📊 {{ session.get('name', '학생') }}님의 학습 피드백</h1>
+
+        {% if feedback %}
+            <div class="feedback-block">
+                <h2>🔍 분석 결과</h2>
+                <p>{{ feedback | safe }}</p>
+            </div>
+
+            <div class="plot-block">
+                <h2>📈 몰입도 그래프</h2>
+                <img src="{{ url_for('static', filename='feedback_' + session.get('name', '') + '.png') }}" alt="피드백 그래프">
+            </div>
+        {% else %}
+            <form method="POST" action="/feedback">
+                <button type="submit">피드백 받기</button>
+        {% endif %}
+
+        <a href="/home">← 다시 입력하기</a>
+    </div>
+</body>
+</html>

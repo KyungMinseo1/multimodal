@@ -1,0 +1,174 @@
+body {
+    font-family: Arial, sans-serif;
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: 20px;
+    background-color: #f5f5f5;
+}
+
+.container {
+    background: white;
+    border-radius: 10px;
+    padding: 30px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+}
+
+h1 {
+    text-align: center;
+    color: #333;
+    margin-bottom: 30px;
+}
+
+.video-container {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 30px;
+    position: relative;
+}
+
+#videoPreview {
+    width: 640px;
+    height: 480px;
+    border: 3px solid #ddd;
+    border-radius: 10px;
+    background-color: #000;
+}
+
+.recording-indicator {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    background: rgba(244, 67, 54, 0.9);
+    color: white;
+    padding: 8px 15px;
+    border-radius: 20px;
+    font-weight: bold;
+    font-size: 14px;
+    display: none;
+}
+
+.recording-indicator.active {
+    display: block;
+    animation: pulse 2s infinite;
+}
+
+.version-section {
+    margin: 30px 0;
+    padding: 20px;
+    border: 2px solid #e0e0e0;
+    border-radius: 8px;
+    background-color: #fafafa;
+}
+
+.version-title {
+    font-size: 18px;
+    font-weight: bold;
+    margin-bottom: 15px;
+    color: #444;
+}
+
+.button-group {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 15px;
+    justify-content: center;
+}
+
+button {
+    padding: 12px 24px;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 16px;
+    font-weight: bold;
+    transition: all 0.3s ease;
+}
+
+.start-btn {
+    background-color: #4CAF50;
+    color: white;
+}
+
+.start-btn:hover {
+    background-color: #45a049;
+}
+
+.start-btn:disabled {
+    background-color: #cccccc;
+    cursor: not-allowed;
+}
+
+.stop-btn {
+    background-color: #f44336;
+    color: white;
+}
+
+.stop-btn:hover {
+    background-color: #da190b;
+}
+
+.stop-btn:disabled {
+    background-color: #cccccc;
+    cursor: not-allowed;
+}
+
+.status-btn {
+    background-color: #2196F3;
+    color: white;
+}
+
+.status-btn:hover {
+    background-color: #0b7dda;
+}
+
+.status {
+    margin-top: 15px;
+    padding: 10px;
+    border-radius: 5px;
+    font-weight: bold;
+    text-align: center;
+}
+
+.status.recording {
+    background-color: #ffebee;
+    color: #c62828;
+    border: 1px solid #ffcdd2;
+}
+
+.status.stopped {
+    background-color: #e8f5e8;
+    color: #2e7d32;
+    border: 1px solid #c8e6c9;
+}
+
+.status.info {
+    background-color: #e3f2fd;
+    color: #1565c0;
+    border: 1px solid #bbdefb;
+}
+
+.description {
+    margin-top: 10px;
+    color: #666;
+    font-size: 14px;
+    line-height: 1.4;
+    text-align: center;
+}
+
+.pulse {
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0% { opacity: 1; }
+    50% { opacity: 0.7; }
+    100% { opacity: 1; }
+}
+
+.timer {
+    text-align: center;
+    font-size: 18px;
+    font-weight: bold;
+    margin-top: 10px;
+    color: #333;
+}
