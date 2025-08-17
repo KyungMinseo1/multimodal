@@ -152,7 +152,7 @@ class EndtoEndModel(nn.Module):
         
         # 배치 텐서인 경우 직접 처리
         if isinstance(cropped_faces, torch.Tensor):
-            if cropped_faces.dim() == 4:  # [B, 3, 224, 224]
+            if cropped_faces.dim() == 4:  # [B, 3, 448, 448]
                 batch_size = cropped_faces.shape[0]
                 
                 # MobileNet용 입력 (224x224로 리사이즈 필요)
@@ -193,7 +193,7 @@ class EndtoEndModel(nn.Module):
         img_features = self.mobile_net(mobilenet_batch)
         with torch.no_grad():
             yaw_f, pitch_f, eye_features = self.eye_track_model(l2cs_batch)
-            yaw, pitch = predict(yaw_f[i:i+1], pitch_f[i:i+1])
+            yaw, pitch = predict(yaw_f, pitch_f)
         
         mobilenet_features = self.mobilenet_proj(img_features)
         l2cs_features = self.l2cs_proj(eye_features)
