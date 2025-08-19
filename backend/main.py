@@ -15,8 +15,6 @@ import time
 import torch
 from PIL import Image
 from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import ProcessPoolExecutor
-
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -133,7 +131,7 @@ class LectureAnalyzer:
         """실시간 데이터 청크를 받아 멀티모달 모델로 분석"""
         try:
             # 1. 데이터 전처리
-            pil_image = Image.open(io.BytesIO(frame_data))
+            pil_image = Image.open(io.BytesIO(frame_data)).convert("RGB")
 
             pil_image.save("output.jpg")
 

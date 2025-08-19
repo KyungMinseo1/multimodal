@@ -13,6 +13,17 @@ from PIL import Image
 import face_alignment
 import warnings
 import logging
+from wav_process import FastAudioPreprocessor, preprocess_audio_data
+
+audio_conf = {
+    'num_mel_bins': 128, 
+    'target_length': 1024, 
+    'freqm': 48, 
+    'timem': 192,  
+    'dataset': 'aihub_audio_dataset', 
+    'mean':-4.2677393, 
+    'std':4.5689974
+    }
 
 # --- 로깅 설정 ---
 logging.basicConfig(
@@ -201,9 +212,9 @@ class EndtoEndModel(nn.Module):
         z_visual = torch.stack([mobilenet_features, l2cs_features, fa_features], dim=1)
 
         with torch.no_grad():
-            audio_class, audio_feature = self.noise_classifier(audio_features)
-            audio_class = F.softmax(audio_class, dim=1)
-        
+            audio_class_logits, audio_feature = self.noise_classifier(audio_features)
+            audio_class = torch.sigmoid(audio_class_logits)
+
         z_audio = self.audio_proj(audio_feature)
 
         fused_feature = self.fusion_block(z_visual, z_audio)
@@ -257,22 +268,21 @@ def load_model():
     e2e_model.eval()
     return face_box, e2e_model
 
-def warmup_model(face_box, e2e_model, jpg_input_shape=(1,3,640,640), jpg2_input_shape=(1,3,448,448), aud_input_shape=(1, 1024, 128)):
+def warmup_model(face_box, e2e_model):
     "빠른 추론을 위한 warmup 기능"
     logger.info("Starting Warmup")
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     face_box = face_box.eval().to(device)
     e2e_model = e2e_model.eval().to(device)
-    dummy_jpg_input = torch.rand(jpg_input_shape).to(device) * 255
-    dummy_jpg2_input = torch.rand(jpg2_input_shape).to(device) * 255
-    dummy_aud_input = torch.randn(aud_input_shape).to(device)
+    pad = FastAudioPreprocessor(audio_conf)
+    img = Image.open('../warmup_files/temp_image.jpg').convert("RGB")
+    aud = preprocess_audio_data(pad, '../warmup_files/temp_audio.wav')
+
     with torch.no_grad():
         for _ in range(2):  # 2회 정도 실행
-            face_box(dummy_jpg_input)
-            result = e2e_model(dummy_jpg2_input, dummy_aud_input)
+            result = run(face_box, e2e_model, img, aud)
     logger.info("Warmup Finished")
     return result
-
 
 def run(face_box, e2e_model, img, aud):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -350,7 +360,7 @@ def run(face_box, e2e_model, img, aud):
         cropped_face = cropped_face.to(device)
         _, _, class_output, [yaw, pitch], audio_class = e2e_model(cropped_face, aud)
         predicted = torch.argmax(class_output, dim=1).item()
-        noise_predicted = torch.argmax(audio_class, dim=1).item()
+        noise_predicted = torch.argmax(audio_class[..., :-1], dim=1).item()
         label_dict = {
             0: "집중_흥미로움",
             1: "집중_차분함",
