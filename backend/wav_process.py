@@ -35,7 +35,7 @@ class FastAudioPreprocessor:
         waveform = resample_if_necessary(waveform, sr)
         waveform = waveform - waveform.mean()
 
-        fbank = torchaudio.compliance.kaldi.fbank(waveform, htk_compat=True, sample_frequency=sr, use_energy=False,
+        fbank = torchaudio.compliance.kaldi.fbank(waveform, htk_compat=True, sample_frequency=target_sr, use_energy=False,
                                                   window_type='hanning', num_mel_bins=self.melbins, dither=0.0, frame_shift=10)
 
         target_length = self.audio_conf.get('target_length')
