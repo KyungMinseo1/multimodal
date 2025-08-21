@@ -161,6 +161,7 @@ class EndtoEndModel(nn.Module):
         # 검증을 위한 값
         global_face_points = []
         global_eye_img = []
+        global_eye_outputs = []
         
         # 배치 텐서인 경우 직접 처리
         if isinstance(cropped_faces, torch.Tensor):
@@ -237,6 +238,11 @@ class EndtoEndModel(nn.Module):
             left_outputs, hidden_l = self.eye_blinker(eye_l_batch)
             right_outputs, hidden_r = self.eye_blinker(eye_r_batch)
 
+            left_outputs = torch.round(torch.sigmoid(left_outputs)).detach().cpu().numpy()
+            right_outputs = torch.round(torch.sigmoid(right_outputs)).detach().cpu().numpy()
+
+            global_eye_outputs.append([left_outputs[0][0], right_outputs[0][0]])
+
             eye_hidden = torch.cat([hidden_l, hidden_r], dim=1)
         
         mobilenet_features = self.mobilenet_proj(img_features)
@@ -253,7 +259,7 @@ class EndtoEndModel(nn.Module):
         fused_feature = self.fusion_block(z_visual, z_audio)
         class_output = self.final_classifier(fused_feature)
 
-        return z_visual, z_audio, class_output, (yaw, pitch), audio_class, (cropped_faces[0].cpu(), global_face_points[0], global_eye_img[0]), audio_features[0].cpu()
+        return z_visual, z_audio, class_output, (yaw, pitch), audio_class, (cropped_faces[0].cpu(), global_face_points[0], global_eye_img[0], global_eye_outputs[0]), audio_features[0].cpu()
 
     def crop_eye(self, img, eye_points):
         x1, y1 = np.amin(eye_points, axis=0)
@@ -440,14 +446,14 @@ def run(face_box, e2e_model, img, aud, check=False):
         result = label_dict.get(int(predicted), "Unknown")
         noise_result = noise_label_dict.get(int(noise_predicted), "Unknown")
         if check:
-            check_visual(visual_outputs[0], visual_outputs[1], visual_outputs[2], (yaw, pitch), result, audio_inputs, noise_result)
+            check_visual(visual_outputs[0], visual_outputs[1], visual_outputs[2], visual_outputs[3], (yaw, pitch), result, audio_inputs, noise_result)
         return (
             (int(predicted), result),
             (yaw, pitch),
             (int(noise_predicted), noise_result)
         ), audio_inputs
 
-def check_visual(cropped_faces, face_points, eye_img, pose, result, audio_inputs, noise_result):
+def check_visual(cropped_faces, face_points, eye_img, eye_result, pose, result, audio_inputs, noise_result):
     """
     눈 처리 과정에서 오류 발생 시 디버깅용 시각화
     
@@ -544,12 +550,20 @@ def check_visual(cropped_faces, face_points, eye_img, pose, result, audio_inputs
     if eye_img_l is not None:
         info += f"Left Eye Shape: {eye_img_l.shape}\n"
         info += f"Left Eye Empty?: {eye_img_l.size == 0}\n"
+        if int(eye_result[0]) == 1:
+            info += "Left Eye Result: OPEN\n"
+        else:
+            info += "Left Eye Result: CLOSED\n"
     else:
         info += f"Left Eye: None\n"
         
     if eye_img_r is not None:
         info += f"Right Eye Shape: {eye_img_r.shape}\n" 
         info += f"Right Eye Empty?: {eye_img_r.size == 0}\n"
+        if int(eye_result[1]) == 1:
+            info += "Right Eye Result: OPEN\n"
+        else:
+            info += "Right Eye Result: CLOSED\n"
     else:
         info += f"Right Eye: None\n"
     
