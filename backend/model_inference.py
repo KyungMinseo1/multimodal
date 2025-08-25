@@ -7,7 +7,6 @@ from eye_tracker.L2CS import load_model as l2cs_load
 from eye_tracker.L2CS import predict
 from noise_classifier_ast.classifier import load_model as noise_classifier_load
 from face_box.yolo import load_model as face_box_load
-from eye_blinker.eye_blinker import load_model as eye_blinker_load
 from torchvision.models import mobilenet_v2
 from torchvision import transforms
 from PIL import Image
@@ -230,7 +229,7 @@ def load_model():
     # L2CS 객체 초기화
     l2cs = l2cs_load()
     # MediaPipe 객체 초기화
-    fa = face_alignment.FaceAlignment(face_alignment.LandmarksType.TWO_D, device='cuda')
+    fa = face_alignment.FaceAlignment(face_alignment.LandmarksType.TWO_D, device='cuda' if torch.cuda.is_available() else 'cpu')
     # NoiseClassifier 객체 초기화
     noise_classifier = noise_classifier_load()
     # FaceBox 객체 초기화
