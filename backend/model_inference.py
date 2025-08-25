@@ -70,7 +70,11 @@ class MobileNetModel(nn.Module):
 class ProjectionHead(nn.Module):
     def __init__(self, input_dim, proj_dim):
         super(ProjectionHead, self).__init__()
-        self.projector = nn.Linear(input_dim, proj_dim)
+        self.projector = nn.Sequential(
+            nn.Linear(input_dim, 512),
+            nn.ReLU(),
+            nn.Linear(512, proj_dim)
+        )
 
     def forward(self, x):
         x = self.projector(x)
@@ -130,26 +134,26 @@ class TransformerFusion(nn.Module):
 
 
 class EndtoEndModel(nn.Module):
-    def __init__(self, mobile_net, eye_track_model, noise_classifier, face_mesh_model, eye_blinker,
-                 mobilenet_proj, l2cs_proj, audio_proj, eye_proj,
+    def __init__(self, mobile_net, eye_track_model, noise_classifier, face_mesh_model,
+                 mobilenet_proj, l2cs_proj, fa_proj, audio_proj,
                  fusion_block, final_classifier):
         super(EndtoEndModel, self).__init__()
         self.mobile_net = mobile_net
         self.eye_track_model = eye_track_model
         self.noise_classifier = noise_classifier
         self.face_mesh_model = face_mesh_model  # → face_alignment.FaceAlignment 객체
-        self.eye_blinker = eye_blinker
         self.mobilenet_proj = mobilenet_proj
         self.l2cs_proj = l2cs_proj
+        self.fa_proj = fa_proj
         self.audio_proj = audio_proj
-        self.eye_proj = eye_proj
         self.fusion_block = fusion_block
         self.final_classifier = final_classifier
         self._extracted_audio_feature = None
-        self.IMG_SIZE = (34,26)
 
-        self.eye_transform = transforms.Compose([
-            transforms.ToTensor()
+        self.transform = transforms.Compose([
+            transforms.Resize((224, 224)),  # MobileNetV2 입력 크기
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
 
     def forward(self, cropped_faces, audio_features):
@@ -160,8 +164,6 @@ class EndtoEndModel(nn.Module):
 
         # 검증을 위한 값
         global_face_points = []
-        global_eye_img = []
-        global_eye_outputs = []
         
         # 배치 텐서인 경우 직접 처리
         if isinstance(cropped_faces, torch.Tensor):
@@ -178,10 +180,7 @@ class EndtoEndModel(nn.Module):
                 mobilenet_batch = (mobilenet_batch - mean) / std
                 l2cs_batch = (cropped_faces - mean) / std
 
-                # 배치로 eye_box 추출
-                eye_tensor_l_list = []
-                eye_tensor_r_list = []
-
+                face_points_list = []
                 for i in range(batch_size):
                     # 텐서를 numpy로 변환하여 face mesh 모델에 입력
                     face_img = cropped_faces[i].permute(1, 2, 0).cpu().numpy()
@@ -198,33 +197,10 @@ class EndtoEndModel(nn.Module):
                         face_points = landmarks_list[0]
                     global_face_points.append(face_points)
 
-                    # eye_box 추출 진행
-                    gray = cv2.cvtColor(face_crop_np, cv2.COLOR_BGR2GRAY)
-                    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-                    gray = clahe.apply(gray)
-                    eye_img_l, eye_rect_l = self.crop_eye(gray, eye_points=face_points[36:42])
-                    eye_img_r, eye_rect_r = self.crop_eye(gray, eye_points=face_points[42:48])
-
-                    if eye_img_l is None or eye_img_l.size == 0 or eye_img_r is None or eye_img_r.size == 0:
-                        eye_img_l = np.zeros((self.IMG_SIZE[1], self.IMG_SIZE[0]), dtype=np.uint8)
-                        eye_img_r = np.zeros((self.IMG_SIZE[1], self.IMG_SIZE[0]), dtype=np.uint8)
-                    else:
-                        eye_img_l = cv2.resize(eye_img_l, dsize=self.IMG_SIZE)
-                        eye_img_r = cv2.resize(eye_img_r, dsize=self.IMG_SIZE)
-
-                    global_eye_img.append([eye_img_l, eye_img_r])
-
-                    # 이미지 변환 후 텐서로 변환 
-                    eye_Img_l = Image.fromarray(eye_img_l)
-                    eye_Img_r = Image.fromarray(eye_img_r)
-                    eye_tensor_l = self.eye_transform(eye_Img_l)
-                    eye_tensor_r = self.eye_transform(eye_Img_r)
-
-                    eye_tensor_l_list.append(eye_tensor_l)
-                    eye_tensor_r_list.append(eye_tensor_r)
+                    face_points_flat = face_points.flatten()  # [136]
+                    face_points_list.append(face_points_flat)
                 
-                eye_l_batch = torch.stack(eye_tensor_l_list, dim=0).to(device)
-                eye_r_batch = torch.stack(eye_tensor_r_list, dim=0).to(device)
+                face_points_batch = torch.tensor(face_points_list, device=device, dtype=torch.float32)
             else:
                 raise ValueError(f"Expected 4D tensor for batch processing, got {cropped_faces.dim()}D")
 
@@ -233,22 +209,11 @@ class EndtoEndModel(nn.Module):
         with torch.no_grad():
             yaw_f, pitch_f, eye_features = self.eye_track_model(l2cs_batch)
             yaw, pitch = predict(yaw_f, pitch_f)
-
-        with torch.no_grad():
-            left_outputs, hidden_l = self.eye_blinker(eye_l_batch)
-            right_outputs, hidden_r = self.eye_blinker(eye_r_batch)
-
-            left_outputs = torch.round(torch.sigmoid(left_outputs)).detach().cpu().numpy()
-            right_outputs = torch.round(torch.sigmoid(right_outputs)).detach().cpu().numpy()
-
-            global_eye_outputs.append([left_outputs[0][0], right_outputs[0][0]])
-
-            eye_hidden = torch.cat([hidden_l, hidden_r], dim=1)
         
         mobilenet_features = self.mobilenet_proj(img_features)
         l2cs_features = self.l2cs_proj(eye_features)
-        eye_features = self.eye_proj(eye_hidden)
-        z_visual = torch.stack([mobilenet_features, l2cs_features, eye_features], dim=1)
+        fa_features = self.fa_proj(face_points_batch)
+        z_visual = torch.stack([mobilenet_features, l2cs_features, fa_features], dim=1)
 
         with torch.no_grad():
             audio_class_logits, audio_feature = self.noise_classifier(audio_features)
@@ -259,44 +224,22 @@ class EndtoEndModel(nn.Module):
         fused_feature = self.fusion_block(z_visual, z_audio)
         class_output = self.final_classifier(fused_feature)
 
-        return z_visual, z_audio, class_output, (yaw, pitch), audio_class, (cropped_faces[0].cpu(), global_face_points[0], global_eye_img[0], global_eye_outputs[0]), audio_features[0].cpu()
-
-    def crop_eye(self, img, eye_points):
-        x1, y1 = np.amin(eye_points, axis=0)
-        x2, y2 = np.amax(eye_points, axis=0)
-        cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
-
-        w = (x2 - x1) * 1.2
-        h = w * self.IMG_SIZE[1] / self.IMG_SIZE[0]
-
-        margin_x, margin_y = w / 2, h / 2
-
-        min_x, min_y = int(cx - margin_x), int(cy - margin_y)
-        max_x, max_y = int(cx + margin_x), int(cy + margin_y)
-
-        eye_rect = np.rint([min_x, min_y, max_x, max_y]).astype(int)
-
-        eye_img = img[eye_rect[1]:eye_rect[3], eye_rect[0]:eye_rect[2]]
-
-        return eye_img, eye_rect
+        return z_visual, z_audio, class_output, (yaw, pitch), audio_class, (cropped_faces[0].cpu(), global_face_points[0]), audio_features[0].cpu()
 
 def load_model():
     # L2CS 객체 초기화
     l2cs = l2cs_load()
     # MediaPipe 객체 초기화
-    fa = face_alignment.FaceAlignment(face_alignment.LandmarksType.TWO_D, device="cpu")
+    fa = face_alignment.FaceAlignment(face_alignment.LandmarksType.TWO_D, device='cuda')
     # NoiseClassifier 객체 초기화
     noise_classifier = noise_classifier_load()
     # FaceBox 객체 초기화
     face_box = face_box_load()
-    # EyeBlinker 객체 초기화
-    eye_blinker = eye_blinker_load()
 
-    # Assume visual_proj and audio_proj output 256-dim each
     mobile_net_proj = ProjectionHead(input_dim=1280, proj_dim=256)
     l2cs_proj = ProjectionHead(input_dim=2048, proj_dim=256)
+    fa_proj = ProjectionHead(input_dim=136, proj_dim=256)
     audio_proj = ProjectionHead(input_dim=768, proj_dim=256)
-    eye_proj = ProjectionHead(input_dim=1024, proj_dim=256)
 
     fusion_block = TransformerFusion(embed_dim=256, num_heads=4, num_layers=3)
     final_classifier = FinalClassifier(embed_dim=256, num_classes=5)
@@ -307,10 +250,9 @@ def load_model():
         noise_classifier=noise_classifier,
         face_mesh_model=fa,
         mobilenet_proj=mobile_net_proj,
-        eye_blinker=eye_blinker,
         l2cs_proj=l2cs_proj,
+        fa_proj=fa_proj,
         audio_proj=audio_proj,
-        eye_proj=eye_proj,
         fusion_block=fusion_block,
         final_classifier=final_classifier
     )
@@ -446,21 +388,20 @@ def run(face_box, e2e_model, img, aud, check=False):
         result = label_dict.get(int(predicted), "Unknown")
         noise_result = noise_label_dict.get(int(noise_predicted), "Unknown")
         if check:
-            check_visual(visual_outputs[0], visual_outputs[1], visual_outputs[2], visual_outputs[3], (yaw, pitch), result, audio_inputs, noise_result)
+            check_visual(visual_outputs[0], visual_outputs[1], (yaw, pitch), result, audio_inputs, noise_result)
         return (
             (int(predicted), result),
             (yaw, pitch),
             (int(noise_predicted), noise_result)
         ), audio_inputs
 
-def check_visual(cropped_faces, face_points, eye_img, eye_result, pose, result, audio_inputs, noise_result):
+def check_visual(cropped_faces, face_points, pose, result, audio_inputs, noise_result):
     """
     눈 처리 과정에서 오류 발생 시 디버깅용 시각화
     
     Args:
         cropped_faces: torch.Tensor [3, 448, 448] 
         face_points: numpy array [68, 2] - face landmark 좌표
-        eye_img: 왼쪽, 오른쪽 눈 크롭 이미지
         pose: yaw, pitch 시선 각도
         result: str 형식 예측결과
         audio_inputs: 입력된 오디오 특성
@@ -473,7 +414,7 @@ def check_visual(cropped_faces, face_points, eye_img, eye_result, pose, result, 
         face_img = (face_img * 255).astype(np.uint8)
     
     # 2. 시각화 준비
-    fig, axes = plt.subplots(4, 3, figsize=(20, 15))
+    fig, axes = plt.subplots(3, 3, figsize=(20, 15))
     fig.suptitle(f'Face Check', fontsize=16)
     
     # 2-1. 원본 얼굴 이미지 (RGB)
@@ -518,60 +459,6 @@ def check_visual(cropped_faces, face_points, eye_img, eye_result, pose, result, 
                     bbox=dict(boxstyle="round,pad=0.3", facecolor="lightcyan", alpha=0.7))
     axes[0, 2].set_title('Eye Coordinates')
     axes[0, 2].axis('off')
-    
-    # 2-4. 왼쪽 눈 크롭 결과
-    eye_img_l, eye_img_r = eye_img[0], eye_img[1]
-    if eye_img_l is not None and eye_img_l.size > 0:
-        axes[1, 0].imshow(eye_img_l, cmap='gray')
-        axes[1, 0].set_title(f'Left Eye Crop\nShape: {eye_img_l.shape}')
-    else:
-        axes[1, 0].text(0.5, 0.5, 'LEFT EYE\nCROP FAILED', 
-                       transform=axes[1, 0].transAxes, ha='center', va='center',
-                       fontsize=12, color='red', weight='bold')
-        axes[1, 0].set_title('Left Eye Crop - ERROR')
-    axes[1, 0].axis('off')
-    
-    # 2-5. 오른쪽 눈 크롭 결과  
-    if eye_img_r is not None and eye_img_r.size > 0:
-        axes[1, 1].imshow(eye_img_r, cmap='gray')
-        axes[1, 1].set_title(f'Right Eye Crop\nShape: {eye_img_r.shape}')
-    else:
-        axes[1, 1].text(0.5, 0.5, 'RIGHT EYE\nCROP FAILED', 
-                       transform=axes[1, 1].transAxes, ha='center', va='center',
-                       fontsize=12, color='red', weight='bold')
-        axes[1, 1].set_title('Right Eye Crop - ERROR')
-    axes[1, 1].axis('off')
-    
-    # 2-6. 디버그 정보
-    info = f"Face Shape: {face_img.shape}\n\n"
-    info += f"Face Points Shape: {face_points.shape}\n"
-    info += f"All zeros?: {np.all(face_points == 0)}\n\n"
-    
-    if eye_img_l is not None:
-        info += f"Left Eye Shape: {eye_img_l.shape}\n"
-        info += f"Left Eye Empty?: {eye_img_l.size == 0}\n"
-        if int(eye_result[0]) == 1:
-            info += "Left Eye Result: OPEN\n"
-        else:
-            info += "Left Eye Result: CLOSED\n"
-    else:
-        info += f"Left Eye: None\n"
-        
-    if eye_img_r is not None:
-        info += f"Right Eye Shape: {eye_img_r.shape}\n" 
-        info += f"Right Eye Empty?: {eye_img_r.size == 0}\n"
-        if int(eye_result[1]) == 1:
-            info += "Right Eye Result: OPEN\n"
-        else:
-            info += "Right Eye Result: CLOSED\n"
-    else:
-        info += f"Right Eye: None\n"
-    
-    axes[1, 2].text(0.5, 0.5, info, transform=axes[1, 2].transAxes,
-                    fontsize=10, ha='center', va='center', fontweight='bold',
-                    bbox=dict(boxstyle="round,pad=0.3", facecolor="lightyellow", alpha=0.7))
-    axes[1, 2].set_title('Check Info')
-    axes[1, 2].axis('off')
 
     # 시선처리 이미지
     yaw, pitch = pose[0], pose[1]
@@ -580,28 +467,28 @@ def check_visual(cropped_faces, face_points, eye_img, eye_result, pose, result, 
     length = 100
     dx = -length * math.sin(math.radians(yaw))
     dy = -length * math.sin(math.radians(pitch))
-    axes[2, 0].imshow(face_img)
-    axes[2, 0].arrow(center_x, center_y, dx, dy, head_width=10, head_length=15, fc='red', ec='red')
-    axes[2, 0].plot(center_x, center_y, 'bo')
-    axes[2, 0].set_title('Pose')
-    axes[2, 0].axis('off')
+    axes[1, 0].imshow(face_img)
+    axes[1, 0].arrow(center_x, center_y, dx, dy, head_width=10, head_length=15, fc='red', ec='red')
+    axes[1, 0].plot(center_x, center_y, 'bo')
+    axes[1, 0].set_title('Pose')
+    axes[1, 0].axis('off')
     pose_info = f"Yaw: {yaw:.2f}°, Pitch: {pitch:.2f}°"
-    axes[2, 1].text(0.5, 0.5, pose_info, transform=axes[2, 1].transAxes,
+    axes[1, 1].text(0.5, 0.5, pose_info, transform=axes[1, 1].transAxes,
                     fontsize=14, ha='center', va='center', fontweight='bold',
                     bbox=dict(boxstyle="round,pad=0.3", facecolor="lavender", alpha=0.7))
-    axes[2, 1].axis('off')
+    axes[1, 1].axis('off')
 
     # 최종 예측 결과
     result_info = f"Final Prediction : {result}"
-    axes[2, 2].text(0.5, 0.5, result_info, transform=axes[2, 2].transAxes,
+    axes[1, 2].text(0.5, 0.5, result_info, transform=axes[1, 2].transAxes,
                     fontsize=14, ha='center', va='center', fontweight='bold',
                     bbox=dict(boxstyle="round,pad=0.3", facecolor="lightblue", alpha=0.7))
-    axes[2, 2].axis('off')
+    axes[1, 2].axis('off')
     
     # 오디오 특성
-    axes[3, 0].remove()
-    axes[3, 1].remove() 
-    ax_combined = plt.subplot2grid((4, 3), (3, 0), colspan=2, fig=fig)
+    axes[2, 0].remove()
+    axes[2, 1].remove() 
+    ax_combined = plt.subplot2grid((3, 3), (2, 0), colspan=2, fig=fig)
     im = ax_combined.imshow(audio_inputs.T, aspect='auto', origin='lower')
     plt.colorbar(im, ax=ax_combined, format="%+2.0f dB")
     ax_combined.set_title("Mel Filter Bank Features (fbank)")
@@ -610,11 +497,11 @@ def check_visual(cropped_faces, face_points, eye_img, eye_result, pose, result, 
 
     # 잡음 예측 결과 (1칸)
     audio_info = f"Noise Prediction:\n{noise_result}"
-    axes[3, 2].text(0.5, 0.5, audio_info, transform=axes[3, 2].transAxes,
+    axes[2, 2].text(0.5, 0.5, audio_info, transform=axes[2, 2].transAxes,
                 fontsize=14, ha='center', va='center', fontweight='bold',
                 bbox=dict(boxstyle="round,pad=0.3", facecolor="lightcoral", alpha=0.7))
-    axes[3, 2].set_title('Audio Result')
-    axes[3, 2].axis('off')
+    axes[2, 2].set_title('Audio Result')
+    axes[2, 2].axis('off')
 
     plt.tight_layout()    
     plt.savefig(os.path.join(config.WARMUP_PATH, 'check.png'), dpi=150, bbox_inches='tight')
